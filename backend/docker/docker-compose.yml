@@ -1,17 +1,17 @@
 services:
   cs2-server:
     image: joedwards32/cs2
-    container_name: cs2-dedicated
+    container_name: cs2-match-${MATCH_ID}
     environment:
       # Server configuration
-      - SRCDS_TOKEN=82FB437DACC4CE116D56A7E4260C4F13               # Game Server Token from https://steamcommunity.com/dev/managegameservers
+      - SRCDS_TOKEN=${SRCDS_TOKEN}               # Game Server Token from https://steamcommunity.com/dev/managegameservers
       - DEBUG=3                     # (0 - off, 1 - steamcmd, 2 - cs2, 3 - all)
       - STEAMAPPVALIDATE=0          # (0 - no validation, 1 - enable validation)
-      - CS2_SERVERNAME=linux_dev     # (Set the visible name for your private server.)
+      - CS2_SERVERNAME=${SERVER_NAME}    # (Set the visible name for your private server.)
       - CS2_CHEATS=1                # (0 - disable cheats, 1 - enable cheats)
-      - CS2_PORT=27015              # (CS2 server listen port tcp_udp)
+      - CS2_PORT=27015            #NO TOCAR ESTE PUERTO (INTERNO DEL CONTENDOR) # (CS2 server listen port tcp_udp)
       - CS2_SERVER_HIBERNATE=0      # (Put server in a low CPU state when there are no players. 0 - hibernation disabled, 1 - hibernation enabled)
-      - CS2_RCON_PORT=27017              # (Optional, use a simple TCP proxy to have RCON listen on an alternative port. Useful for services like AWS Fargate which do not support mixed protocol ports.)
+      - CS2_RCON_PORT=27017         #NO TOCAR ESTE PUERTO (INTERNO DEL CONTENDOR)     # (Optional, use a simple TCP proxy to have RCON listen on an alternative port. Useful for services like AWS Fargate which do not support mixed protocol ports.)
       - CS2_LAN=0                   # (0 - LAN mode disabled, 1 - LAN Mode enabled)
       - CS2_RCONPW=changeme         # (RCON password)
       - CS2_PW                      # (Optional, CS2 server password)
@@ -34,7 +34,7 @@ services:
       # TV
       - TV_AUTORECORD=0             # Automatically records all games as CSTV demos: 0=off, 1=on.
       - TV_ENABLE=0                 # Activates CSTV on server: 0=off, 1=on.
-      - TV_PORT=27020               # Host SourceTV port
+      - TV_PORT=27020               #NO TOCAR ESTE PUERTO (INTERNO DEL CONTENDOR) # Host SourceTV port
       - TV_PW=changeme              # CSTV password for clients
       - TV_RELAY_PW=changeme        # CSTV password for relay proxies
       - TV_MAXRATE=0                # World snapshots to broadcast per second. Affects camera tickrate.
@@ -49,9 +49,9 @@ services:
       - ../../cs2-server-base/steamcmd-cache:/home/steam/steamcmd
       - ../../cs2-server-base/steam-cache:/home/steam/Steam
     ports:
-      - "27015:27015/tcp"           # TCP
-      - "27015:27015/udp"           # UDP
-      - "27020:27020/udp"           # UDP
-      - "27017:27017/tcp"           # RCON TCP port
+      - "${GAME_PORT}:27015/tcp"           # TCP
+      - "${GAME_PORT}:27015/udp"           # UDP
+      - "${TV_PORT}:27020/udp"           # UDP
+      - "${RCON_PORT}:27017/tcp"           # RCON TCP port
     stdin_open: true # Add local console for docker attach, docker attach --sig-proxy=false cs2-dedicated
     tty: true # Add local console for docker attach, docker attach --sig-proxy=false cs2-dedicated

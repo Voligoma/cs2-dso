@@ -1,2 +1,7 @@
 /cs2-server-base
 /.vscode
+/backend/api/.venv
+__pycache__/
+*.pyc
+/backend/api/servers.db
+/backend/api/servers backup.db
