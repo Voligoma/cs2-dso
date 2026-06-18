@@ -1,1 +1,0 @@
-En la raíz del proyecto debería haber una carpeta llamada cs2-server-base, en la cual se encuntre la instalación del juego y dos carpetas steam-cache y steamcmd-cache, en esas 2 carpetas se aloja steamcmd con todas sus dependencias, para que cada contenedor no tenga que descargarlas e intalarlas cada vez.
