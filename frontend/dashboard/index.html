@@ -5,74 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CS2 Orchestrator Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    
+    <script src="app.js" defer></script>
+    
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen" 
-      x-data="{ 
-        backendUrl: 'http://192.168.1.11:8000', 
-        matches: [], 
-        serverName: '',
-        mapaInicial: 'de_inferno',
-        loading: false,
+      x-data="orchestrator" 
+      x-init="fetchMatches(); setInterval(() => fetchMatches(), 10000)">
 
-        // Función para traer todos los matches del Backend
-        async fetchMatches() {
-            try {
-                let response = await fetch(`${this.backendUrl}/matches`);
-                this.matches = await response.json();
-            } catch (err) {
-                alert('Error conectando al backend: ' + err.message);
-            }
-        },
-
-        // Función para lanzar un servidor automáticamente
-        async launchServer() {
-            if (!this.serverName.trim()) return alert('Escribí un nombre para el servidor.');
-            this.loading = true;
-            try {
-                let response = await fetch(`${this.backendUrl}/matches/autolaunch`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ server_name: this.serverName })
-                });
-                if (response.ok) {
-                    this.serverName = '';
-                    await this.fetchMatches(); // Refrescar lista
-                } else {
-                    let errData = await response.json();
-                    alert('Error: ' + JSON.stringify(errData.detail));
-                }
-            } catch (err) {
-                alert('Error al lanzar: ' + err.message);
-            } finally {
-                this.loading = false;
-            }
-        },
-
-        // Función para apagar un servidor
-        async destroyServer(sessionId) {
-            if (!confirm('¿Estás seguro de apagar este servidor?')) return;
-            try {
-                await fetch(`${this.backendUrl}/matches/destroy?session_id=${sessionId}`, { method: 'POST' });
-                await this.fetchMatches();
-            } catch (err) {
-                alert('Error al destruir: ' + err.message);
-            }
-        },
-
-        // Función para sincronizar jugadores por RCON
-        async syncPlayers(sessionId) {
-            try {
-                let response = await fetch(`${this.backendUrl}/matches/sync-players?session_id=${sessionId}`, { method: 'POST' });
-                let data = await response.json();
-                alert(`Sincronizado. Jugadores en vivo: ${data.live_players}`);
-                await this.fetchMatches();
-            } catch (err) {
-                alert('Error RCON: ' + err.message);
-            }
-        }
-      }" 
-      x-init="fetchMatches(); setInterval(() => fetchMatches(), 10000)"> <div class="max-w-6xl mx-auto p-6">
+    <div class="max-w-6xl mx-auto p-6">
         
         <header class="flex justify-between items-center mb-8 pb-4 border-b border-gray-800">
             <div>
@@ -122,7 +64,7 @@
                             <th class="px-6 py-3.5">Server</th>
                             <th class="px-6 py-3.5">State</th>
                             <th class="px-6 py-3.5">Ports (Game / GOTV)</th>
-                            <th class="px-6 py-3.5 text-center">Players (WIP)</th>
+                            <th class="px-6 py-3.5 text-center">Players</th>
                             <th class="px-6 py-3.5 text-right">Actions</th>
                         </tr>
                     </thead>

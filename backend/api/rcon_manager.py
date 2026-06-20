@@ -1,7 +1,6 @@
 from rcon.source import Client
-import time
 
-def execute_rcon_command(rcon_port, password, command, ip="127.0.0.1"):
+def execute_rcon_command(rcon_port:int, password:str, command, ip="127.0.0.1"):
     """
     Se conecta al servidor de CS2 por RCON, ejecuta un comando y devuelve la respuesta.
     """
@@ -17,6 +16,7 @@ def execute_rcon_command(rcon_port, password, command, ip="127.0.0.1"):
 # PRUEBA DE FUEGO EN CALIENTE
 # =========================================================================
 if __name__ == "__main__":
+    import time
     # IMPORTANTE: Estos datos tienen que coincidir con el contenedor que tengas prendido.
     # En el ejemplo de la API anterior usamos:
     PUERTO_RCON_TEST = 27017  # El puerto RCON de tu match de prueba

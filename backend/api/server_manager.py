@@ -7,11 +7,26 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Field, Session, SQLModel, create_engine, select, or_
+from apscheduler.schedulers.background import BackgroundScheduler
 import uuid
 from enum import Enum
+import re
 
 from rcon_manager import execute_rcon_command
+
+# =========================================================================
+# Startup
+# =========================================================================
+
 ADMIN_SECRET = "changeme"  # Change this for a real password in production
+
+class statuses(str, Enum):
+    creating = "creating"
+    online = "online"
+    stopping = "stopping"
+    destroyed = "destroyed"
+    error = "error"
+
 app = FastAPI(title="CS2 Orchestrator API")
 
 app.add_middleware(
@@ -21,6 +36,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+scheduler = BackgroundScheduler()
+
+# Conexión automática a SQLite
+DB_FILE = "servers.db"
+engine = create_engine(f"sqlite:///{DB_FILE}", connect_args={"check_same_thread": False})
+
+# Crea las tablas al arrancar
+SQLModel.metadata.create_all(engine)
+
+try:
+    docker_client = docker.from_env()
+except Exception as e:
+    print(f"Error connecting to Docker deamon: {e}")
+    exit(1)
+
+# =========================================================================
+# DB models
+# =========================================================================   
+
+class MatchBase(SQLModel):
+    server_name: str
+
+class MatchCreate(MatchBase):
+    srcds_token: str
+    game_port: int
+
+class Match(MatchBase, table=True):
+    """Base match table"""
+    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    
+    srcds_token: Optional[str] = None
+    game_port: Optional[int] = None
+    tv_port: Optional[int] = None
+    rcon_port: Optional[int] = None
+    
+    container_id: Optional[str] = None
+    status: statuses = Field(default=statuses.creating)
+    players: int = 0
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    destroyed_at: str = ""
+
+class PortPool(SQLModel, table=True):
+    """Inventory of ports for servers"""
+    game_port: int = Field(primary_key=True)
+    assigned_session_id: Optional[str] = Field(default=None, unique=True)
+    tv_port: int
+    rcon_port: int
+    in_use: bool = Field(default=False)
+
+class SRCDSPool(SQLModel, table=True):
+    """inventory of SRDCS keys/tokens for servers"""
+    token: str = Field(primary_key=True, unique=True)
+    assigned_session_id: Optional[str] = Field(default=None, unique=True)
+    in_use: bool = Field(default=False)
+    
+
 # =========================================================================
 # internal Functions
 # =========================================================================
@@ -207,69 +279,57 @@ def db_docker_destroy_logic(session_id: str):
             session_db.add(db_match)
             session_db.commit()
             return current_session_id, container.short_id
-    
+
+def extract_player_count(status_string:str):
+    """
+    Use regex to parse the players from the output of the status command in rcon
+    """
+    match = re.search(r"players\s*:\s*(\d+)\s*humans", status_string)
+    if match:
+        return int(match.group(1))
+    return 0
+
+def get_matches_details(status: Optional[statuses] = None):
+    with Session(engine) as session:
+        query = select(Match)
+        if status is not None:
+            query = query.where(Match.status == status)
+        matches = session.exec(query).all()
+        return matches
+
+
 # =========================================================================
-# SEPARACIÓN DE MODELOS (Esquemas de Entrada vs Tabla de DB)
+# Scheduler Jobs
 # =========================================================================
-class statuses(str, Enum):
-    creating = "creating"
-    online = "online"
-    stopping = "stopping"
-    destroyed = "destroyed"
-    error = "error"
-    
-class MatchBase(SQLModel):
-    server_name: str
+def update_servers_playercount():
+    print("[Scheduler] Updating player count")
+    count = 0
+    online_matches = get_matches_details(statuses.online)
+    if online_matches == None:
+        print("[Scheduler] No online matches to update")
+        return 0
+    for match in online_matches:
+        count += 1
+        if match.rcon_port == None:
+            continue
+        current_match_status = execute_rcon_command(match.rcon_port, ADMIN_SECRET, "status")
+        current_match_players = extract_player_count(current_match_status)
+        print(f"[Scheduler] Updating player count for server {match.session_id}")
+        with Session(engine) as session:
+            query = select(Match).where(Match.session_id == match.session_id)
+            result = session.exec(query).first()
+            if result is not None:
+                result.players = current_match_players
+            session.add(result)
+            session.commit()
+            session.refresh(result)
+            print(f"[Scheduler] Player count for server {match.session_id} is: {current_match_players}")
+    print(f"[Scheduler] Updated player count for {count} servers")
 
-class MatchCreate(MatchBase):
-    srcds_token: str
-    game_port: int
-
-class Match(MatchBase, table=True):
-    """Base match table"""
-    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    
-    srcds_token: Optional[str] = None
-    game_port: Optional[int] = None
-    tv_port: Optional[int] = None
-    rcon_port: Optional[int] = None
-    
-    container_id: Optional[str] = None
-    status: statuses = Field(default=statuses.creating)
-    players: int = 0
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    destroyed_at: str = ""
-
-class PortPool(SQLModel, table=True):
-    """Inventory of ports for servers"""
-    game_port: int = Field(primary_key=True)
-    assigned_session_id: Optional[str] = Field(default=None, unique=True)
-    tv_port: int
-    rcon_port: int
-    in_use: bool = Field(default=False)
-
-class SRCDSPool(SQLModel, table=True):
-    """nventory of SRDCS keys/tokens for servers"""
-    token: str = Field(primary_key=True, unique=True)
-    assigned_session_id: Optional[str] = Field(default=None, unique=True)
-    in_use: bool = Field(default=False)
-    
-# Conexión automática a SQLite
-DB_FILE = "servers.db"
-engine = create_engine(f"sqlite:///{DB_FILE}", connect_args={"check_same_thread": False})
-
-# Crea las tablas al arrancar
-SQLModel.metadata.create_all(engine)
+scheduler.start()
+update_player_counts_job = scheduler.add_job(update_servers_playercount, 'interval', seconds=30)
 
 seed_port_pool()
-
-try:
-    docker_client = docker.from_env()
-except Exception as e:
-    print(f"Error connecting to Docker deamon: {e}")
-    exit(1)
-
-
 # =========================================================================
 # API
 # =========================================================================
@@ -490,13 +550,7 @@ def api_listar_matches(status: Optional[statuses] = None):
     Allows to request a list of all the instances with full details,
     also allows to filter by state.
     """
-    
-    with Session(engine) as session:
-        query = select(Match)
-        if status is not None:
-            query = query.where(Match.status == status)
-        matches = session.exec(query).all()
-        return matches
+    return get_matches_details(status)
 
 @app.post("/matches/destroy")
 def api_destroy_server(session_id: str):
@@ -545,6 +599,27 @@ def api_get_match_status(session_id: str):
         raise HTTPException(status_code=404, detail=f"No server was found for match {session_id}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occured while trying to obtain session info: {str(e)}")
+
+@app.get("/matches/get_match_players")
+def api_get_match_players(session_id: str):
+    """
+    Gets the number of players in a specific match providing the id.
+    """
+    try:
+        with Session(engine) as session:
+            query = select(Match).where(Match.session_id == session_id)
+            result = session.exec(query).first()
+            if not result:
+                raise HTTPException(status_code=404, detail=f"No server was found for match {session_id}")
+            return{
+                "player_count": result.players
+                }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occured while trying to obtain session info: {str(e)}")        
+            
+# =========================================================================
+# Admin endpoints
+# =========================================================================
 
 @app.post("/admin/tokens/bulk-import", tags=["Admin"])
 def api_bulk_import_tokens(payload: list[str], admin_secret: str):
@@ -665,8 +740,6 @@ def api_destroy_all_servers(admin_secret: str):
         "status": "success",
         "message": f"Deleting process finalized. {deleted_qty} servers deleted"
     }
-
-
 
 if __name__ == "__main__":
     import uvicorn
