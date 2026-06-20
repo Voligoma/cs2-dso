@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS2 Orchestrator Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen" 
+      x-data="{ 
+        backendUrl: 'http://192.168.1.11:8000', 
+        matches: [], 
+        serverName: '',
+        mapaInicial: 'de_inferno',
+        loading: false,
+
+        // Función para traer todos los matches del Backend
+        async fetchMatches() {
+            try {
+                let response = await fetch(`${this.backendUrl}/matches`);
+                this.matches = await response.json();
+            } catch (err) {
+                alert('Error conectando al backend: ' + err.message);
+            }
+        },
+
+        // Función para lanzar un servidor automáticamente
+        async launchServer() {
+            if (!this.serverName.trim()) return alert('Escribí un nombre para el servidor.');
+            this.loading = true;
+            try {
+                let response = await fetch(`${this.backendUrl}/matches/autolaunch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_name: this.serverName })
+                });
+                if (response.ok) {
+                    this.serverName = '';
+                    await this.fetchMatches(); // Refrescar lista
+                } else {
+                    let errData = await response.json();
+                    alert('Error: ' + JSON.stringify(errData.detail));
+                }
+            } catch (err) {
+                alert('Error al lanzar: ' + err.message);
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        // Función para apagar un servidor
+        async destroyServer(sessionId) {
+            if (!confirm('¿Estás seguro de apagar este servidor?')) return;
+            try {
+                await fetch(`${this.backendUrl}/matches/destroy?session_id=${sessionId}`, { method: 'POST' });
+                await this.fetchMatches();
+            } catch (err) {
+                alert('Error al destruir: ' + err.message);
+            }
+        },
+
+        // Función para sincronizar jugadores por RCON
+        async syncPlayers(sessionId) {
+            try {
+                let response = await fetch(`${this.backendUrl}/matches/sync-players?session_id=${sessionId}`, { method: 'POST' });
+                let data = await response.json();
+                alert(`Sincronizado. Jugadores en vivo: ${data.live_players}`);
+                await this.fetchMatches();
+            } catch (err) {
+                alert('Error RCON: ' + err.message);
+            }
+        }
+      }" 
+      x-init="fetchMatches(); setInterval(() => fetchMatches(), 10000)"> <div class="max-w-6xl mx-auto p-6">
+        
+        <header class="flex justify-between items-center mb-8 pb-4 border-b border-gray-800">
+            <div>
+                <h1 class="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-amber-400">CS2 ORCHESTRATOR</h1>
+                <p class="text-gray-400 text-sm">Dedicated Server dashboard</p>
+            </div>
+            <button @click="fetchMatches()" class="bg-gray-800 hover:bg-gray-700 text-sm px-4 py-2 rounded-lg transition font-semibold">
+                🔄 Refresh
+            </button>
+        </header>
+
+        <section class="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-8 shadow-xl">
+            <h2 class="text-lg font-bold mb-4 text-orange-400">Launch new instance</h2>
+            <div class="flex flex-col md:flex-row gap-4 items-end">
+                <div class="flex-1">
+                    <label class="block text-xs uppercase tracking-wider font-bold text-gray-400 mb-2">Server Name</label>
+                    <input x-model="serverName" type="text" placeholder="Ej: Server 1" 
+                           class="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-orange-500">
+                </div>
+                <div class="w-full md:w-52">
+                    <label class="block text-xs uppercase tracking-wider font-bold text-gray-400 mb-2">Initial Map (WIP)</label>
+                    <select x-model="mapaInicial" class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:border-orange-500">
+                        <option value="de_inferno">de_inferno</option>
+                        <option value="de_mirage">de_mirage</option>
+                        <option value="de_nuke">de_nuke</option>
+                        <option value="de_anubis">de_anubis</option>
+                        <option value="de_ancient">de_ancient</option>
+                    </select>
+                </div>
+                <button @click="launchServer()" :disabled="loading"
+                        class="w-full md:w-auto bg-gradient-to-r from-orange-600 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-gray-950 font-bold px-6 py-2.5 rounded-lg transition shadow-lg disabled:opacity-50">
+                    <span x-show="!loading">Launch Server</span>
+                    <span x-show="loading">Creating... ⏳</span>
+                </button>
+            </div>
+        </section>
+
+        <main class="bg-gray-900 border border-gray-800 rounded-xl shadow-xl overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-800">
+                <h2 class="text-lg font-bold text-gray-200">🖥️ Active Instances</h2>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-950/50 text-xs font-bold uppercase tracking-wider text-gray-400 border-b border-gray-800">
+                            <th class="px-6 py-3.5">Server</th>
+                            <th class="px-6 py-3.5">State</th>
+                            <th class="px-6 py-3.5">Ports (Game / GOTV)</th>
+                            <th class="px-6 py-3.5 text-center">Players (WIP)</th>
+                            <th class="px-6 py-3.5 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800 text-sm">
+                        <template x-if="matches.length === 0">
+                            <tr>
+                                <td colspan="5" class="px-6 py-10 text-center text-gray-500 italic">
+                                    No active servers at the moment.
+                                </td>
+                            </tr>
+                        </template>
+
+                        <template x-for="match in matches" :key="match.session_id">
+                            <tr class="hover:bg-gray-800/40 transition">
+                                <td class="px-6 py-4">
+                                    <div class="font-bold text-gray-200" x-text="match.server_name"></div>
+                                    <div class="text-xs text-gray-500 font-mono mt-0.5" x-text="match.session_id.substring(0,8) + '...'"></div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span x-text="match.status" 
+                                          :class="{
+                                            'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20': match.status === 'online',
+                                            'bg-amber-500/10 text-amber-400 border border-amber-500/20': match.status === 'creating',
+                                            'bg-red-500/10 text-red-400 border border-red-500/20': match.status === 'error',
+                                            'bg-gray-500/10 text-gray-400 border border-gray-500/20': match.status === 'destroyed' || match.status === 'stopping'
+                                          }"
+                                          class="px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide">
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 font-mono text-gray-300">
+                                    <span x-show="match.game_port" x-text="match.game_port + ' / ' + match.tv_port"></span>
+                                    <span x-show="!match.game_port" class="text-gray-600">-</span>
+                                </td>
+                                <td class="px-6 py-4 text-center font-bold text-gray-300">
+                                    <span x-text="match.players"></span> <span class="text-xs text-gray-500 font-normal">/ 10</span>
+                                </td>
+                                <td class="px-6 py-4 text-right space-x-1.5">
+                                    <button @click="syncPlayers(match.session_id)" 
+                                            x-show="match.status === 'online'"
+                                            class="bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/20 px-3 py-1.5 rounded-md text-xs font-semibold transition">
+                                        📊 RCON Status
+                                    </button>
+                                    <button @click="destroyServer(match.session_id)" 
+                                            x-show="match.status !== 'destroyed' && match.status !== 'stopping'"
+                                            class="bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/20 px-3 py-1.5 rounded-md text-xs font-semibold transition">
+                                        🛑 Shutdown
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

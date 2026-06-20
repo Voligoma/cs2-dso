@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Field, Session, SQLModel, create_engine, select, or_
 import uuid
 from enum import Enum
@@ -12,6 +13,14 @@ from enum import Enum
 from rcon_manager import execute_rcon_command
 ADMIN_SECRET = "changeme"  # Change this for a real password in production
 app = FastAPI(title="CS2 Orchestrator API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # =========================================================================
 # internal Functions
 # =========================================================================
@@ -166,6 +175,39 @@ def release_token(session_id:str):
         session.commit()
         
         return token
+
+def db_docker_destroy_logic(session_id: str):
+    container_name = f"cs2-match-{session_id}"
+    container = docker_client.containers.get(container_name)
+    current_session_id = None
+    
+    # Update state to Stopping
+    with Session(engine) as session_db:
+        db_match = session_db.get(Match, session_id)
+        if db_match:
+            db_match.status = statuses.stopping
+            session_db.add(db_match)
+            session_db.commit()
+
+    print(f"[Docker] Stopping {container_name}...")
+    container.stop(timeout=10)
+    
+    print(f"[Docker] Deleting {container_name}...")
+    container.remove()
+    
+    # Update state to Destroyed
+    with Session(engine) as session_db:
+        release_ports(session_id)
+        release_token(session_id)
+        db_match = session_db.get(Match, session_id)
+        if db_match:
+            current_session_id = db_match.session_id
+            db_match.status = statuses.destroyed
+            db_match.destroyed_at = datetime.now().isoformat()
+            session_db.add(db_match)
+            session_db.commit()
+            return current_session_id, container.short_id
+    
 # =========================================================================
 # SEPARACIÓN DE MODELOS (Esquemas de Entrada vs Tabla de DB)
 # =========================================================================
@@ -432,6 +474,8 @@ def api_autolaunch_server(config: MatchBase):
 
     except Exception as e:
         # If failure, is registered in the DB as Error
+        release_ports(session_id)
+        release_token(session_id)
         with Session(engine) as session:
             db_match = session.get(Match, session_id)
             if db_match:
@@ -461,71 +505,51 @@ def api_destroy_server(session_id: str):
     """
     
     try:
-        container_name = f"cs2-match-{session_id}"
-        container = docker_client.containers.get(container_name)
-        current_session_id = None
-        
-        # Update state to Stopping
-        with Session(engine) as session_db:
-            db_match = session_db.get(Match, session_id)
-            if db_match:
-                db_match.status = statuses.stopping
-                session_db.add(db_match)
-                session_db.commit()
-
-        print(f"[Docker] Stopping {container_name}...")
-        container.stop(timeout=10)
-        
-        print(f"[Docker] Dealeting {container_name}...")
-        container.remove()
-        
-        # Update state to Destroyed
-        with Session(engine) as session_db:
-            release_ports(session_id)
-            release_token(session_id)
-            db_match = session_db.get(Match, session_id)
-            if db_match:
-                current_session_id = db_match.session_id
-                db_match.status = statuses.destroyed
-                db_match.destroyed_at = datetime.now().isoformat()
-                session_db.add(db_match)
-                session_db.commit()
-
+        query = db_docker_destroy_logic(session_id)
         return {
             "status": "success",
             "message": f"Server for match {session_id} destroyed",
-            "session_id": current_session_id,
-            "container_id": container.short_id,
+            "session_id": query[0],
+            "container_id": query[1],
         }
     except NotFound:
         raise HTTPException(status_code=404, detail=f"No server was found for match {session_id}")        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occured while trying to delete the server: {str(e)}")
 
-@app.get("/matches/get_server_status")
-def api_get_server_status(session_id: str):
+@app.get("/matches/get_match_status")
+def api_get_match_status(session_id: str):
     """
-    Gets a specific instace status providing the id.
+    Gets a specific match status providing the id.
     """
     
     try:
-        container_name = f"cs2-match-{session_id}"
-        container = docker_client.containers.get(container_name)
+        with Session(engine) as session:
+            query = select(Match).where(Match.session_id == session_id)
+            result = session.exec(query).first()
+            
+            print(result)
         return {
             "status": "success",
             "message": f"Server for match {session_id} is active",
-            "container_id": container.short_id,
-            "state": container.status
+            "container_id": result.container_id,
+            "state": result.status,
+            "players": result.players,
+            "created_at": result.created_at,
+            "destroyed_at": result.destroyed_at,
+            "game_port": result.game_port,
+            "tv_port": result.tv_port,
+            "rcon_port": result.rcon_port,
         }
     except NotFound:
         raise HTTPException(status_code=404, detail=f"No server was found for match {session_id}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occured while trying to obtain server info: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occured while trying to obtain session info: {str(e)}")
 
 @app.post("/admin/tokens/bulk-import", tags=["Admin"])
 def api_bulk_import_tokens(payload: list[str], admin_secret: str):
     """
-    Allows admin user to bulk add SRDCS token (WIP)
+    Allows admin user to bulk add SRDCS token
     """
     if admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Not Authorized")
@@ -562,6 +586,27 @@ def api_bulk_import_tokens(payload: list[str], admin_secret: str):
         "ignored_duplicated_tokens": duplicados
     } 
 
+@app.post("/admin/tokens/delete", tags=["Admin"])
+def api_delete_token(token: str, admin_secret: str):
+    """
+    Allows admin user to delete a SRDCS token from the pool
+    """
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Not Authorized")
+
+    with Session(engine) as session:
+        token_entry = session.get(SRCDSPool, token)
+        if not token_entry:
+            raise HTTPException(status_code=404, detail="Token not found in pool")
+        
+        session.delete(token_entry)
+        session.commit()
+
+    return {
+        "status": "success",
+        "message": f"Token {token} deleted from pool"
+    }
+
 @app.post("/admin/matches/purge", tags=["Admin"])
 def api_purge_matches(admin_secret: str):
     """
@@ -576,7 +621,7 @@ def api_purge_matches(admin_secret: str):
         
         for match in selectable_sessions:
             try:
-                docker_client.containers.get(str(match.container_id))
+               container = docker_client.containers.get(str(match.container_id))
             except NotFound:
                 release_ports(match.session_id)
                 release_token(match.session_id)
@@ -607,10 +652,10 @@ def api_destroy_all_servers(admin_secret: str):
         for match in selectable_sessions:
             try:
                 docker_client.containers.get(str(match.container_id))
-                api_destroy_server(match.session_id)
+                db_docker_destroy_logic(match.session_id)
                 deleted_qty = deleted_qty + 1
             except NotFound:
-                raise HTTPException(status_code=404, detail=f"No server found dor {match.session_id}")
+                raise HTTPException(status_code=404, detail=f"No server found for {match.session_id}")
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error while trying to delete container: {str(e)}")
         session.commit()
